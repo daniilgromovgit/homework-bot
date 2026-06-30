@@ -7,6 +7,8 @@ import requests
 from dotenv import load_dotenv
 from telebot import TeleBot
 
+from exceptions import UnavailableEndpointError
+
 load_dotenv()
 
 PRACTICUM_TOKEN: str | None = os.getenv('PRACTICUM_TOKEN')
@@ -23,27 +25,44 @@ HOMEWORK_VERDICTS: dict[str, str] = {
     'reviewing': 'Работа взята на проверку ревьюером.',
     'rejected': 'Работа проверена: у ревьюера есть замечания.',
 }
-
-logging.basicConfig(
-    format='%(asctime)s %(name)s [%(levelname)s] %(message)s',
-    level=logging.DEBUG,
+TOKEN_MISSING_MESSAGE = (
+    'Отсутствуют обязательные переменные окружения: {tokens}'
 )
+ENDPOINT_ERROR_MESSAGE = (
+    'Эндпоинт {url} недоступен. Headers: {headers}, '
+    'params: {params}. Код ответа API: {code}'
+)
+STATUS_CHANGED_MESSAGE = 'Изменился статус проверки работы "{name}". {verdict}'
+
+
+def configure_logging():
+    """Настраивает логирование."""
+    log_dir = os.path.join(os.path.expanduser("~"), "homework_bot_logs")
+    os.makedirs(log_dir, exist_ok=True)
+
+    log_file = os.path.join(log_dir, f"{os.path.basename(__file__)}.log")
+
+    logging.basicConfig(
+        format='%(asctime)s %(name)s %(funcName)s:%(lineno)d '
+        '[%(levelname)s] %(message)s',
+        level=logging.DEBUG,
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(log_file, encoding="utf-8"),
+        ],
+    )
+
+
+REQUIRED_TOKENS = ('PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID')
 
 
 def check_tokens() -> bool:
     """Проверяет наличие всех необходимых переменных окружения."""
-    required_tokens: dict[str, str | None] = {
-        'PRACTICUM_TOKEN': PRACTICUM_TOKEN,
-        'TELEGRAM_TOKEN': TELEGRAM_TOKEN,
-        'TELEGRAM_CHAT_ID': TELEGRAM_CHAT_ID,
-    }
-    missing_tokens: list[str] = [
-        name for name, token in required_tokens.items() if not token
+    missing_tokens = [
+        name for name in REQUIRED_TOKENS if not globals().get(name)
     ]
-    for name in missing_tokens:
-        logging.critical(
-            f'Отсутствует обязательная переменная окружения: {name}.'
-        )
+    if missing_tokens:
+        logging.critical(TOKEN_MISSING_MESSAGE.format(tokens=missing_tokens))
     return not missing_tokens
 
 
@@ -52,27 +71,45 @@ def send_message(bot, message) -> bool:
     try:
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
     except Exception as e:
-        logging.error(f'Ошибка при отправке сообщения: {e}.')
+        logging.exception(f'Ошибка при отправке сообщения {message}: {e}.')
         return False
-    logging.debug('Сообщение успешно отправлено!')
+    logging.debug(f'Сообщение {message} успешно отправлено!')
     return True
 
 
 def get_api_answer(timestamp: int) -> dict:
     """Делает запрос к единственному эндпоинту API-сервиса."""
-    try:
-        homework_statuses = requests.get(
-            ENDPOINT, headers=HEADERS, params={'from_date': timestamp}
-        )
-    except requests.RequestException as e:
-        raise ConnectionError(f'Эндпоинт {ENDPOINT} недоступен: {e}')
+    params = {'from_date': timestamp}
 
-    if homework_statuses.status_code != 200:
-        raise requests.HTTPError(
+    try:
+        response = requests.get(ENDPOINT, headers=HEADERS, params=params)
+    except requests.RequestException as e:
+        raise ConnectionError(
             f'Эндпоинт {ENDPOINT} недоступен. '
-            f'Код ответа API: {homework_statuses.status_code}'
+            f'headers={HEADERS}, params={params}. Ошибка: {e}'
         )
-    return homework_statuses.json()
+
+    if response.status_code != requests.codes.ok:
+        raise UnavailableEndpointError(
+            ENDPOINT_ERROR_MESSAGE.format(
+                url=ENDPOINT,
+                headers=HEADERS,
+                params=params,
+                code=response.status_code,
+            )
+        )
+    response_json = response.json()
+    for key in ('error', 'code'):
+        if key in response_json:
+            raise UnavailableEndpointError(
+                ENDPOINT_ERROR_MESSAGE.format(
+                    url=ENDPOINT,
+                    headers=HEADERS,
+                    params=params,
+                    code=response.status_code,
+                )
+            )
+    return response_json
 
 
 def check_response(response) -> list:  # -> list[Any]:
@@ -81,10 +118,16 @@ def check_response(response) -> list:  # -> list[Any]:
         raise TypeError('Ответ API не является словарем.')
     if 'homeworks' not in response:
         raise KeyError('В ответе API отсутствует ключ "homeworks".')
-    if not isinstance(response['homeworks'], list):
-        raise TypeError('Значение ключа "homeworks" не является списком.')
-    if not isinstance(response['current_date'], int):
-        raise TypeError('Значение ключа "current_date" не является int')
+    if not isinstance(response.get('homeworks'), list):
+        raise TypeError(
+            f'Значение ключа "homeworks" не является списком: '
+            f'{type(response.get("homeworks"))}'
+        )
+    if not isinstance(response.get('current_date'), int):
+        raise TypeError(
+            f'Значение ключа "current_date" не является int: '
+            f'{type(response.get("current_date"))}'
+        )
     return response['homeworks']
 
 
@@ -94,21 +137,22 @@ def parse_status(homework) -> str:
         raise KeyError('В ответе API отсутствует ключ "homework_name"')
     if 'status' not in homework:
         raise KeyError('В ответе API отсутствует ключ "status"')
-    if homework['status'] not in HOMEWORK_VERDICTS:
-        raise ValueError('В ответе API отсутствует допустимое значение')
-    homework_name: str = homework['homework_name']
-    verdict: str = HOMEWORK_VERDICTS[homework['status']]
-    return f'Изменился статус проверки работы "{homework_name}". {verdict}'
+    status = homework['status']
+    if status not in HOMEWORK_VERDICTS:
+        raise ValueError(
+            f'В ответе API отсутствует допустимое значение: {status}'
+        )
+
+    return STATUS_CHANGED_MESSAGE.format(
+        name=homework['homework_name'],
+        verdict=HOMEWORK_VERDICTS[status],
+    )
 
 
 def main():
     """Основная логика работы бота."""
     if not check_tokens():
-        sys.exit(
-            'Отсутствуют обязательные переменные окружения.'
-            'Программа принудительно остановлена.'
-        )
-    assert TELEGRAM_TOKEN is not None
+        return
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     last_error_message = ''
@@ -117,21 +161,23 @@ def main():
             response: dict = get_api_answer(timestamp)
             homeworks: list = check_response(response)
             if homeworks:
-                for homework in homeworks:
-                    status: str = parse_status(homework)
-                    send_message(bot, status)
+                status: str = parse_status(homeworks[-1])
+                if send_message(bot, status):
+                    logging.debug(
+                        f'Статус домашней работы успешно отправлен: {status}'
+                    )
+                    timestamp = response.get('current_date', timestamp)
             else:
                 logging.debug('Нет новых статусов домашних работ.')
-            timestamp: int = response['current_date']
         except Exception as e:
             message: str = f'Сбой в работе программы: {e}'
             logging.error(message)
-            if last_error_message != message:
-                if send_message(bot, message):
-                    last_error_message: str = message
+            if last_error_message != message and send_message(bot, message):
+                last_error_message: str = message
 
         time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
+    configure_logging()
     main()
