@@ -37,10 +37,10 @@ STATUS_CHANGED_MESSAGE = 'Изменился статус проверки ра�
 
 def configure_logging():
     """Настраивает логирование."""
-    log_dir = os.path.join(os.path.expanduser("~"), "homework_bot_logs")
+    log_dir = os.path.join(os.path.expanduser('~'), 'homework_bot_logs')
     os.makedirs(log_dir, exist_ok=True)
 
-    log_file = os.path.join(log_dir, f"{os.path.basename(__file__)}.log")
+    log_file = os.path.join(log_dir, f'{os.path.basename(__file__)}.log')
 
     logging.basicConfig(
         format='%(asctime)s %(name)s %(funcName)s:%(lineno)d '
@@ -48,7 +48,7 @@ def configure_logging():
         level=logging.DEBUG,
         handlers=[
             logging.StreamHandler(sys.stdout),
-            logging.FileHandler(log_file, encoding="utf-8"),
+            logging.FileHandler(log_file, encoding='utf-8'),
         ],
     )
 
@@ -121,12 +121,12 @@ def check_response(response) -> list:  # -> list[Any]:
     if not isinstance(response.get('homeworks'), list):
         raise TypeError(
             f'Значение ключа "homeworks" не является списком: '
-            f'{type(response.get("homeworks"))}'
+            f'{type(response.get('homeworks'))}'
         )
     if not isinstance(response.get('current_date'), int):
         raise TypeError(
             f'Значение ключа "current_date" не является int: '
-            f'{type(response.get("current_date"))}'
+            f'{type(response.get('current_date'))}'
         )
     return response['homeworks']
 
