@@ -176,9 +176,10 @@ def main():
             if homeworks:
                 status: str = parse_status(homeworks[0])
                 send_message(bot, status)
-                timestamp = response.get('current_date', timestamp)
+
             else:
                 logging.debug(NO_NEW_STATUSES_MESSAGE)
+            timestamp = response.get('current_date', timestamp)
         except Exception as e:
             message: str = PROGRAMM_ERROR.format(error=e)
             logging.error(message)
