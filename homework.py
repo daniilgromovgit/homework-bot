@@ -172,13 +172,9 @@ def main():
             response: dict = get_api_answer(timestamp)
             homeworks: list = check_response(response)
             timestamp = response.get('current_date', timestamp)
-            send_message(
-                bot,
-                parse_status(homeworks[0])
-                if homeworks
-                else NO_NEW_STATUSES_MESSAGE,
-            )
-            if not homeworks:
+            if homeworks:
+                send_message(bot, parse_status(homeworks[0]))
+            else:
                 logging.debug(NO_NEW_STATUSES_MESSAGE)
 
         except Exception as e:
