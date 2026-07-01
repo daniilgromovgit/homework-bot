@@ -65,7 +65,7 @@ def check_tokens() -> bool:
     return not missing_tokens
 
 
-def send_message(bot, message) -> bool:
+def send_message(bot, message):
     """Отправляет сообщение в Telegram чат."""
     try:
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
@@ -75,9 +75,7 @@ def send_message(bot, message) -> bool:
                 message=message, status=MESSAGE_SEND_ERROR.format(error=e)
             )
         )
-        return False
     logging.debug(LOG_MESSAGE.format(message=message, status=MESSAGE_SENT))
-    return True
 
 
 def get_api_answer(timestamp: int) -> dict:
@@ -173,13 +171,16 @@ def main():
         try:
             response: dict = get_api_answer(timestamp)
             homeworks: list = check_response(response)
-            if homeworks:
-                status: str = parse_status(homeworks[0])
-                send_message(bot, status)
-
-            else:
-                logging.debug(NO_NEW_STATUSES_MESSAGE)
             timestamp = response.get('current_date', timestamp)
+            send_message(
+                bot,
+                parse_status(homeworks[0])
+                if homeworks
+                else NO_NEW_STATUSES_MESSAGE,
+            )
+            if not homeworks:
+                logging.debug(NO_NEW_STATUSES_MESSAGE)
+
         except Exception as e:
             message: str = PROGRAMM_ERROR.format(error=e)
             logging.error(message)
