@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import time
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
@@ -30,11 +31,17 @@ TOKEN_MISSING_MESSAGE = (
 )
 ENDPOINT_ERROR_MESSAGE = (
     'Эндпоинт {url} недоступен. '
-    'Headers: {headers}, params: {params}. {context}'
+    'Headers: {headers}, params: {params}. Ошибка:{error}'
 )
-API_STATUS = 'Код ответа API: {code}'
+API_STATUS_ERROR_MESSAGE = (
+    'Эндпоинт {url} вернул код {code} (headers={headers}, params={params}).'
+)
+API_ERROR_KEY_MESSAGE = (
+    'API вернул ошибку по ключу "{key}": {value} '
+    '(url={url}, headers={headers}, params={params}).'
+)
 STATUS_CHANGED_MESSAGE = 'Изменился статус проверки работы "{name}". {verdict}'
-RESPONSE_TYPE_ERROR = RESPONSE_TYPE_ERROR = (
+RESPONSE_TYPE_ERROR = (
     'Ответ API не является {type_name}. Получен тип: {actual_type}.'
 )
 KEY_TYPE_ERROR = (
@@ -45,7 +52,6 @@ KEY_MISSING_ERROR = 'В ответе API отсутствует ключ "{key}"
 VALUE_MISSING_ERROR = 'В ответе API отсутствует значение "{value}".'
 DICT_TYPE = 'словарём'
 LIST_TYPE = 'списком'
-INT_TYPE = 'целым числом'
 LOG_MESSAGE = 'Сообщение "{message}" {status}.'
 MESSAGE_SENT = 'успешно отправлено'
 MESSAGE_SEND_ERROR = 'не отправлено. Ошибка: {error}'
@@ -75,7 +81,9 @@ def send_message(bot, message):
                 message=message, status=MESSAGE_SEND_ERROR.format(error=e)
             )
         )
+        return False
     logging.debug(LOG_MESSAGE.format(message=message, status=MESSAGE_SENT))
+    return True
 
 
 def get_api_answer(timestamp: int) -> dict:
@@ -87,27 +95,23 @@ def get_api_answer(timestamp: int) -> dict:
     }
     try:
         response = requests.get(**request_kwargs)
-    except requests.RequestException:
+    except requests.RequestException as e:
         raise ConnectionError(
-            ENDPOINT_ERROR_MESSAGE.format(
-                **request_kwargs, context='Ошибка: {e}'
-            )
+            ENDPOINT_ERROR_MESSAGE.format(**request_kwargs, error=e)
         )
 
     if response.status_code != requests.codes.ok:
         raise UnavailableEndpointError(
-            ENDPOINT_ERROR_MESSAGE.format(
-                **request_kwargs,
-                context=API_STATUS.format(code=response.status_code),
+            API_STATUS_ERROR_MESSAGE.format(
+                **request_kwargs, code=response.status_code
             )
         )
     response_json = response.json()
     for key in ('error', 'code'):
         if key in response_json:
             raise UnavailableEndpointError(
-                ENDPOINT_ERROR_MESSAGE.format(
-                    **request_kwargs,
-                    context=API_STATUS.format(code=response.status_code),
+                API_ERROR_KEY_MESSAGE.format(
+                    **request_kwargs, key=key, value=response_json[key]
                 )
             )
     return response_json
@@ -130,15 +134,6 @@ def check_response(response) -> list:  # -> list[Any]:
                 key='homeworks',
                 type_name=LIST_TYPE,
                 actual_type=type(homeworks).__name__,
-            )
-        )
-    current_date = response['current_date']
-    if not isinstance(current_date, int):
-        raise TypeError(
-            KEY_TYPE_ERROR.format(
-                key='current_date',
-                type_name=INT_TYPE,
-                actual_type=type(current_date).__name__,
             )
         )
     return homeworks
@@ -171,9 +166,9 @@ def main():
         try:
             response: dict = get_api_answer(timestamp)
             homeworks: list = check_response(response)
-            timestamp = response.get('current_date', timestamp)
             if homeworks:
-                send_message(bot, parse_status(homeworks[0]))
+                if send_message(bot, parse_status(homeworks[0])):
+                    timestamp = response.get('current_date', timestamp)
             else:
                 logging.debug(NO_NEW_STATUSES_MESSAGE)
 
@@ -187,14 +182,13 @@ def main():
 
 
 if __name__ == '__main__':
-    log_file = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        f'{os.path.basename(__file__)}.log',
-    )
+    log_file = Path(__file__).resolve().parent / f'{Path(__file__).name}.log'
 
     logging.basicConfig(
-        format='%(asctime)s %(name)s %(funcName)s:%(lineno)d '
-        '[%(levelname)s] %(message)s',
+        format=(
+            '%(asctime)s %(name)s %(funcName)s:%(lineno)d '
+            '[%(levelname)s] %(message)s'
+        ),
         level=logging.DEBUG,
         handlers=[
             logging.StreamHandler(sys.stdout),
